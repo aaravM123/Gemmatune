@@ -1,6 +1,3 @@
-//! GemmaTune's stable public configuration and run-manifest API.
-//! All persisted files are JSON so local runs remain inspectable and portable.
-
 use serde::{Deserialize, Serialize};
 use std::{fmt, fs, io, path::Path};
 

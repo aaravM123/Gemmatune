@@ -1,9 +1,3 @@
-//! Differentiable, full-sequence Gemma 3 decoder used by local LoRA training.
-//!
-//! Candle's upstream Gemma model intentionally returns only its final logits
-//! and mutates a KV cache. This fork uses frozen checkpoint tensors plus
-//! `Var`-backed LoRA matrices, so a teacher-forced forward pass is cache-free
-//! and its loss can be backpropagated into the adapters.
 use candle_core::{DType, Device, Result as CandleResult, Tensor, Var, D};
 use candle_nn::{optim::Optimizer, AdamW, ParamsAdamW, VarBuilder};
 use candle_transformers::utils::repeat_kv;
@@ -52,7 +46,6 @@ impl FrozenLinear {
             .reshape((batch, tokens, self.weight.dim(0)?))
     }
 }
-/// A frozen Gemma projection with the trainable `scale * B @ A` path attached.
 struct LoraLinear {
     base: FrozenLinear,
     a: Var,
@@ -247,10 +240,6 @@ impl Layer {
         &x + self.post_ff_norm.forward(&feed_forward)?
     }
 }
-/// Frozen Gemma 3 1B base weights with eight shared trainable LoRA variables.
-///
-/// This model never maintains a KV cache. `forward` returns a logits row for
-/// every input token (`[batch, sequence, 262144]`) for teacher-forced loss.
 pub struct TrainableGemmaDecoder {
     adapter: TrainableAdapter,
     variables: Vec<(String, Var, Var)>,
@@ -330,7 +319,6 @@ impl TrainableGemmaDecoder {
         })
     }
 
-    /// Returns the actual Candle variables that an optimizer must update.
     pub fn adapter_variables(&self) -> Vec<Var> {
         self.variables
             .iter()
@@ -338,7 +326,6 @@ impl TrainableGemmaDecoder {
             .collect()
     }
 
-    /// Extract the updated values from Candle variables for safetensor output.
     pub fn trained_adapter(&self) -> std::result::Result<TrainableAdapter, String> {
         let mut adapter = self.adapter.clone();
         for tensor in &mut adapter.tensors {
@@ -382,7 +369,6 @@ impl TrainableGemmaDecoder {
     }
 }
 
-/// Metrics returned after updating LoRA variables with each shifted dataset token.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FineTuneResult {
     pub adapter: TrainableAdapter,
@@ -390,7 +376,6 @@ pub struct FineTuneResult {
     pub mean_loss: f32,
 }
 
-/// Fine-tune an adapter with full-token causal cross entropy and Candle AdamW.
 pub fn fine_tune(
     root: impl AsRef<Path>,
     requested: RequestedDevice,

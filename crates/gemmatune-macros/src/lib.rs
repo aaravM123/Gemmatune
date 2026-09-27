@@ -1,5 +1,3 @@
-//! Attribute macros that validate GemmaTune declarations at compile time.
-
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse::Parser, punctuated::Punctuated, Expr, ExprLit, Lit, Meta, Token};
@@ -86,7 +84,6 @@ fn compile_error(error: syn::Error, item: TokenStream) -> TokenStream {
     quote!(#error #item).into()
 }
 
-/// Validates a Gemma model declaration.
 #[proc_macro_attribute]
 pub fn gemma_model(attr: TokenStream, item: TokenStream) -> TokenStream {
     let result = (|| -> Result<(), syn::Error> {
@@ -120,7 +117,6 @@ pub fn gemma_model(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-/// Validates a supported training-dataset declaration.
 #[proc_macro_attribute]
 pub fn training_dataset(attr: TokenStream, item: TokenStream) -> TokenStream {
     let result = (|| -> Result<(), syn::Error> {
@@ -151,7 +147,6 @@ pub fn training_dataset(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-/// Validates an LoRA fine-tuning declaration.
 #[proc_macro_attribute]
 pub fn fine_tune(attr: TokenStream, item: TokenStream) -> TokenStream {
     let result = (|| -> Result<(), syn::Error> {
