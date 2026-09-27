@@ -1,15 +1,8 @@
-//! Evaluation report generation for comparing a base model with its LoRA adapter.
-
 use gemmatune_core::TrainingManifest;
 use gemmatune_lora::AdapterCheckpoint;
 use serde::{Deserialize, Serialize};
 use std::{fs, io, path::Path};
 
-/// Held-out tokenized conversations captured with a completed local run.
-///
-/// The sequences are already redacted when the source dataset requested PII
-/// redaction. Keeping the token IDs with the run makes later evaluation
-/// reproducible even when the original dataset directory has moved.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HeldOutDataset {
     pub schema_version: u8,
@@ -61,15 +54,12 @@ pub struct EvaluationReport {
     pub base_checkpoint: String,
     pub adapter_format: String,
     pub validation_examples: usize,
-    /// Number of generated target tokens included in both accuracy values.
     pub scored_tokens: usize,
     pub base_token_accuracy: f32,
     pub adapter_token_accuracy: f32,
     pub improvement: f32,
 }
 
-/// Compare generated token IDs to held-out target token IDs. Scores are
-/// measured from model output, never inferred from adapter rank or metadata.
 pub fn evaluate(
     manifest: &TrainingManifest,
     adapter: &AdapterCheckpoint,

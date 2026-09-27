@@ -166,10 +166,6 @@ fn load_adapter_weights(
     Ok(adapter)
 }
 
-/// Predict the final token of every held-out conversation after providing its
-/// preceding tokens as context. This uses exactly the same greedy generation
-/// path for frozen and injected Gemma models, rather than metadata-derived
-/// adapter scores.
 fn held_out_predictions<F>(
     held_out: &HeldOutDataset,
     mut generate: F,
@@ -392,7 +388,6 @@ fn serve_run(root: &Path, args: &[String]) -> Result<(), String> {
 }
 
 fn main() {
-    // Compile-time macro usage above is intentionally part of the CLI smoke path.
     let _ = (
         PersonalModel,
         ConversationDataset,
