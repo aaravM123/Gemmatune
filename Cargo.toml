@@ -16,7 +16,6 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/example/gemmatune"
-# Candle's Gemma 3 runtime is verified on this minimum compiler version.
 rust-version = "1.83"
 
 [workspace.dependencies]
@@ -27,13 +26,7 @@ toml = "0.8"
 proc-macro2 = "1.0"
 quote = "1.0"
 syn = { version = "2.0", features = ["full", "parsing"] }
-# Bound an indirect dependency for Cargo 1.83, which cannot parse the
-# Edition-2024 manifest published by newer IndexMap releases.
 indexmap = "=2.7.0"
-# Candle's tokenizer dependency accepts this release, which still supports the
-# workspace's Rust 1.83 compiler.
 unicode-segmentation = "=1.12.0"
-# Candle's numeric-encoding dependency remains compatible with Rust 1.83 at
-# this release; newer proc-macro dependencies require Edition 2024 parsing.
 num_enum = "=0.7.2"
 proc-macro-crate = "=3.1.0"

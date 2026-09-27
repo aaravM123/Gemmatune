@@ -11,8 +11,6 @@ cuda = ["candle-core/cuda", "candle-transformers/cuda"]
 metal = ["candle-core/metal", "candle-transformers/metal"]
 
 [dependencies]
-# Candle 0.9 provides Gemma 3 support while remaining compatible with the
-# workspace's Rust 1.83 toolchain.
 candle-core = "=0.9.1"
 candle-nn = "=0.9.1"
 candle-transformers = "=0.9.1"
