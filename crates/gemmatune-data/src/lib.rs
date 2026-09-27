@@ -1,5 +1,3 @@
-//! Fully local JSONL chat dataset preparation.
-
 use gemmatune_core::DatasetConfig;
 use gemmatune_gemma::{apply_chat_template, ChatMessage};
 use serde::Deserialize;
@@ -30,7 +28,6 @@ impl PreparedDataset {
 
 pub const GEMMA3_TOKENIZER_FILE: &str = "gemma3_cleaned_262144_v2.spiece.model";
 
-/// A real SentencePiece model loaded from the local Gemma checkpoint directory.
 pub struct GemmaTokenizer {
     processor: SentencePieceProcessor,
 }

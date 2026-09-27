@@ -1,5 +1,3 @@
-//! Architecture metadata and the Gemma instruction chat template.
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -13,7 +11,6 @@ pub struct GemmaArchitecture {
     pub context_length: usize,
 }
 
-/// Text-only Gemma 3 attention parameters used by the 1B IT runtime.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GemmaAttentionConfig {
     pub intermediate_size: usize,
@@ -23,7 +20,6 @@ pub struct GemmaAttentionConfig {
     pub local_attention_window: usize,
     pub local_rope_theta: f64,
     pub global_rope_theta: f64,
-    /// Gemma uses five local layers followed by one global layer.
     pub local_attention_pattern: usize,
 }
 
@@ -59,8 +55,6 @@ pub fn architecture(checkpoint: &str) -> Option<GemmaArchitecture> {
             hidden_size: 2560,
             layers: 34,
             vocabulary_size: 262_144,
-            // 1B is the supported implementation target. Keep 4B as a
-            // higher-memory model identifier without asserting its full shape.
             attention: None,
             context_length: 131_072,
         }),
@@ -77,8 +71,6 @@ pub struct ChatMessage {
 pub const EOS_TOKEN: &str = "<eos>";
 
 fn gemma_role(role: &str) -> &str {
-    // Common chat exports call the model turn `assistant`; Gemma IT calls it
-    // `model`, and the serialized prompt must always use the latter.
     match role {
         "assistant" | "model" => "model",
         "user" => "user",
