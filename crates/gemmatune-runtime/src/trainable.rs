@@ -14,6 +14,7 @@ const KV_HEADS: usize = 1;
 const QUERY_WIDTH: usize = HEADS * HEAD_DIM;
 const VOCABULARY: usize = 262_144;
 const MAX_POSITIONS: usize = 32_768;
+const START_OF_TURN_ID: u32 = 105;
 type Result<T> = CandleResult<T>;
 struct RmsNorm {
     weight: Tensor,
@@ -232,7 +233,11 @@ impl Mlp {
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let hidden = (self.gate.forward(x)?.gelu_erf()? * self.up.forward(x)?)?;
+        let gate = self.gate.forward(x)?;
+        let cubic = (&gate * &gate * &gate)?;
+        let tanh_input = ((&gate + (cubic * 0.044_715)?)? * (2.0 / std::f64::consts::PI).sqrt())?;
+        let gelu_tanh = (&gate * 0.5)? * (tanh_input.tanh()? + 1.0)?;
+        let hidden = (gelu_tanh * self.up.forward(x)?)?;
         self.down.forward(&hidden)
     }
 }
@@ -431,19 +436,27 @@ pub fn fine_tune(
         for sequence in sequences {
             let batch = CausalBatch::from_tokens(sequence)?;
             let token_count = batch.token_count();
+            let loss_start = model_turn_loss_start(&batch.inputs)?;
+            let model_targets = batch.targets[loss_start..].to_vec();
             let inputs = Tensor::from_vec(
                 batch.inputs,
                 (1, token_count),
                 &decoder.device,
             )
             .map_err(|error| format!("cannot create training inputs: {error}"))?;
-            let targets = Tensor::from_vec(batch.targets, token_count, &decoder.device)
-                .map_err(|error| format!("cannot create training targets: {error}"))?;
             let logits = decoder
                 .forward(&inputs)
                 .and_then(|logits| logits.reshape((token_count, VOCABULARY)))
                 .map_err(|error| format!("Gemma training forward pass failed: {error}"))?;
-            let loss = candle_nn::loss::cross_entropy(&logits, &targets)
+            let model_logits = logits
+                .narrow(0, loss_start, model_targets.len())
+                .map_err(|error| format!("cannot isolate model-turn logits: {error}"))?;
+            let model_target_count = model_logits
+                .dim(0)
+                .map_err(|error| format!("cannot read model-turn logits: {error}"))?;
+            let model_targets = Tensor::from_vec(model_targets, model_target_count, &decoder.device)
+                .map_err(|error| format!("cannot isolate model-turn targets: {error}"))?;
+            let loss = candle_nn::loss::cross_entropy(&model_logits, &model_targets)
                 .map_err(|error| format!("cannot calculate full-token cross entropy: {error}"))?;
             total_loss += loss
                 .to_scalar::<f32>()
@@ -459,6 +472,13 @@ pub fn fine_tune(
         steps,
         mean_loss: total_loss / steps as f32,
     })
+}
+
+fn model_turn_loss_start(inputs: &[u32]) -> std::result::Result<usize, String> {
+    inputs
+        .iter()
+        .rposition(|token| *token == START_OF_TURN_ID)
+        .ok_or_else(|| "training sequence has no Gemma start-of-turn token".into())
 }
 
 fn read_lora_matrix(
@@ -546,6 +566,25 @@ mod tests {
     }
 
     #[test]
+    fn nonzero_lora_b_changes_projection_output() -> Result<()> {
+        let device = Device::Cpu;
+        let projection = LoraLinear {
+            base: FrozenLinear {
+                weight: Tensor::zeros((2, 2), DType::F32, &device)?,
+            },
+            a: Var::from_vec(vec![1f32, 0.0], (1, 2), &device)?,
+            b: Var::from_vec(vec![2f32, 3.0], (2, 1), &device)?,
+            scale: 1.0,
+        };
+        let input = Tensor::from_vec(vec![1f32, 0.0], (1, 1, 2), &device)?;
+        assert_ne!(
+            projection.base.forward(&input)?.to_vec3::<f32>()?,
+            projection.forward(&input)?.to_vec3::<f32>()?
+        );
+        Ok(())
+    }
+
+    #[test]
     fn creates_a_causal_local_mask() -> Result<()> {
         let mask = causal_mask(1, 3, Some(1), &Device::Cpu)?
             .squeeze(0)?
@@ -576,6 +615,11 @@ mod tests {
             .reshape((batch, tokens, 5))?;
         assert_eq!(logits.dims3()?, (1, 4, 5));
         Ok(())
+    }
+
+    #[test]
+    fn masks_prompt_tokens_before_the_model_turn() {
+        assert_eq!(model_turn_loss_start(&[2, 105, 9, 106, 105, 11, 12]).unwrap(), 4);
     }
 
     #[test]
