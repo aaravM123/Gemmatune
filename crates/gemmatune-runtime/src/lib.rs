@@ -199,7 +199,7 @@ impl LocalGemma {
         let (device, backend) = select_backend(requested)?;
         let paths = safetensor_paths(root.as_ref())?;
         let builder = unsafe {
-            VarBuilder::from_mmaped_safetensors(&paths, DType::BF16, &device)
+            VarBuilder::from_mmaped_safetensors(&paths, DType::F32, &device)
                 .map_err(|error| format!("cannot map Gemma safetensors: {error}"))?
         };
         let model = gemma3::Model::new(false, &gemma_3_1b_config(), builder)
@@ -220,7 +220,7 @@ impl LocalGemma {
         };
         let builder = VarBuilder::from_backend(
             Box::new(LoraBackend { base, adapter }),
-            DType::BF16,
+            DType::F32,
             device.clone(),
         );
         let model = gemma3::Model::new(false, &gemma_3_1b_config(), builder)
@@ -252,5 +252,22 @@ impl LocalGemma {
             generated.push(next);
         }
         Ok(generated)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn casts_bf16_checkpoint_weights_before_cpu_matmul() -> CandleResult<()> {
+        let device = CandleDevice::Cpu;
+        let checkpoint_weight = Tensor::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0], (2, 2), &device)?
+            .to_dtype(DType::BF16)?;
+        let activations = Tensor::from_vec(vec![1.0_f32, 0.0], (1, 2), &device)?;
+        let cpu_weight = checkpoint_weight.to_dtype(DType::F32)?;
+        assert_eq!(cpu_weight.dtype(), DType::F32);
+        assert_eq!(activations.matmul(&cpu_weight)?.dims2()?, (1, 2));
+        Ok(())
     }
 }
