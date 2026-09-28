@@ -578,7 +578,14 @@ fn response(
     let input = tokenizer
         .encode(&prompt)
         .map_err(|error| format!("cannot tokenize request: {error}"))?;
+    let debug_tokens = env::var_os("GEMMATUNE_DEBUG_TOKENS").is_some();
+    if debug_tokens {
+        eprintln!("GemmaTune prompt ids: {input:?}");
+    }
     let output = runtime.generate_until(&input, max_tokens, &tokenizer.generation_stop_ids())?;
+    if debug_tokens {
+        eprintln!("GemmaTune generated ids: {output:?}");
+    }
     let content = tokenizer
         .decode(&output)
         .map_err(|error| format!("cannot decode Gemma output: {error}"))?;

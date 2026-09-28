@@ -27,15 +27,42 @@ impl PreparedDataset {
 }
 
 pub const GEMMA3_TOKENIZER_FILE: &str = "gemma3_cleaned_262144_v2.spiece.model";
+const GEMMA_BOS_ID: u32 = 2;
+const GEMMA_EOS_ID: u32 = 1;
+const GEMMA_START_TURN_ID: u32 = 105;
+const GEMMA_END_TURN_ID: u32 = 106;
 
 pub struct GemmaTokenizer {
     processor: SentencePieceProcessor,
 }
 
-fn is_generation_stop_piece(piece: &str) -> bool {
-    let piece = piece
-        .trim_matches(|character: char| character == '▁' || character.is_whitespace());
-    matches!(piece, "<end_of_turn>" | "<eos>")
+fn encode_gemma_template(
+    template: &str,
+    encode_text: impl Fn(&str) -> Result<Vec<u32>, String>,
+) -> Result<Vec<u32>, String> {
+    let controls = [
+        ("<start_of_turn>", GEMMA_START_TURN_ID),
+        ("<end_of_turn>", GEMMA_END_TURN_ID),
+        ("<eos>", GEMMA_EOS_ID),
+    ];
+    let mut remaining = template;
+    let mut ids = vec![GEMMA_BOS_ID];
+    while !remaining.is_empty() {
+        let next = controls
+            .iter()
+            .filter_map(|(text, id)| remaining.find(text).map(|offset| (offset, *text, *id)))
+            .min_by_key(|(offset, _, _)| *offset);
+        let Some((offset, control, id)) = next else {
+            ids.extend(encode_text(remaining)?);
+            break;
+        };
+        if offset != 0 {
+            ids.extend(encode_text(&remaining[..offset])?);
+        }
+        ids.push(id);
+        remaining = &remaining[offset + control.len()..];
+    }
+    Ok(ids)
 }
 
 impl GemmaTokenizer {
@@ -53,37 +80,29 @@ impl GemmaTokenizer {
     }
 
     pub fn encode(&self, text: &str) -> io::Result<Vec<u32>> {
-        self.processor.encode(text).map_err(|error| {
-            io::Error::new(io::ErrorKind::InvalidData, format!("SentencePiece encoding failed: {error}"))
+        encode_gemma_template(text, |text| {
+            self.processor
+                .encode(text)
+                .map(|ids| ids.into_iter().map(|id| id as u32).collect())
+                .map_err(|error| format!("SentencePiece encoding failed: {error}"))
         }).map(|ids| ids.into_iter().map(|id| id as u32).collect())
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     }
 
     pub fn decode(&self, ids: &[u32]) -> io::Result<String> {
-        let ids = ids.iter().map(|id| *id as i32).collect::<Vec<_>>();
+        let ids = ids
+            .iter()
+            .copied()
+            .filter(|id| !matches!(*id, GEMMA_BOS_ID | GEMMA_EOS_ID | GEMMA_START_TURN_ID | GEMMA_END_TURN_ID))
+            .map(|id| id as i32)
+            .collect::<Vec<_>>();
         self.processor.decode(&ids).map_err(|error| {
             io::Error::new(io::ErrorKind::InvalidData, format!("SentencePiece decoding failed: {error}"))
         })
     }
 
     pub fn generation_stop_ids(&self) -> Vec<u32> {
-        let mut ids = ["<end_of_turn>", "<eos>"]
-            .into_iter()
-            .filter_map(|control| self.processor.encode(control).ok())
-            .filter(|encoded| encoded.len() == 1)
-            .map(|encoded| encoded[0] as u32)
-            .collect::<Vec<_>>();
-        ids.extend(
-            (0..self.processor.piece_size() as i32)
-            .filter(|id| {
-                self.processor
-                    .id_to_piece(*id)
-                    .is_some_and(is_generation_stop_piece)
-            })
-            .map(|id| id as u32),
-        );
-        ids.sort_unstable();
-        ids.dedup();
-        ids
+        vec![GEMMA_EOS_ID, GEMMA_END_TURN_ID]
     }
 }
 
@@ -190,11 +209,21 @@ mod tests {
     }
 
     #[test]
-    fn recognizes_gemma_turn_piece_variants_as_generation_stops() {
-        assert!(is_generation_stop_piece("<end_of_turn>"));
-        assert!(is_generation_stop_piece("▁<end_of_turn>"));
-        assert!(is_generation_stop_piece("<eos>\n"));
-        assert!(!is_generation_stop_piece("end_of_turn"));
+    fn encodes_gemma_control_tokens_as_their_real_ids() {
+        let template = "<start_of_turn>user\nHello<end_of_turn>\n<start_of_turn>model\n";
+        let ids = encode_gemma_template(template, |_| Ok(vec![42])).unwrap();
+        assert_eq!(
+            ids,
+            vec![
+                GEMMA_BOS_ID,
+                GEMMA_START_TURN_ID,
+                42,
+                GEMMA_END_TURN_ID,
+                42,
+                GEMMA_START_TURN_ID,
+                42,
+            ]
+        );
     }
 }
 
