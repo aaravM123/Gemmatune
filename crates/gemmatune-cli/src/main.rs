@@ -30,7 +30,8 @@ fn usage() {
     eprintln!(
         "GemmaTune — local Gemma LoRA tooling\n\
          Usage:\n  gemmatune finetune <dataset-dir> [--device cpu|metal|cuda]\n\
-         \x20 gemmatune evaluate <run-dir>\n  gemmatune serve <run-dir> [--port 8080] [--once]\n\
+         \x20 gemmatune evaluate <run-dir>\n  gemmatune generate <run-dir> --base|--adapter <prompt>\n\
+         \x20 gemmatune serve <run-dir> [--port 8080] [--once]\n\
          \nDataset directories contain gemmatune.toml and conversations.jsonl."
     );
 }
@@ -240,6 +241,33 @@ fn evaluate_run(root: &Path) -> Result<(), String> {
         report.adapter_token_accuracy,
         report.improvement
     );
+    Ok(())
+}
+
+fn generate_run(root: &Path, args: &[String]) -> Result<(), String> {
+    let (manifest, checkpoint) = load_run(root)?;
+    let [mode, prompt] = args else {
+        return Err("generate expects `--base|--adapter <prompt>`".into());
+    };
+    let model_root = local_model_dir(&manifest.config)?;
+    let tokenizer = GemmaTokenizer::open(model_root.join(GEMMA3_TOKENIZER_FILE))
+        .map_err(|error| format!("cannot load Gemma tokenizer: {error}"))?;
+    let template = gemmatune_gemma::apply_chat_template(
+        &[ChatMessage { role: "user".into(), content: prompt.clone() }],
+        true,
+    );
+    let input = tokenizer.encode(&template).map_err(|error| format!("cannot tokenize prompt: {error}"))?;
+    let output = match mode.as_str() {
+        "--base" => LocalGemma::load_1b_it(&model_root, manifest.config.model.device)?
+            .generate_until(&input, 64, &tokenizer.generation_stop_ids())?,
+        "--adapter" => {
+            let adapter = load_adapter_weights(root, checkpoint)?;
+            AdapterRuntime::load(&model_root, manifest.config.model.device, adapter)?
+                .generate_until(&input, 64, &tokenizer.generation_stop_ids())?
+        }
+        _ => return Err("generate expects `--base` or `--adapter`".into()),
+    };
+    println!("{}", tokenizer.decode(&output).map_err(|error| format!("cannot decode output: {error}"))?);
     Ok(())
 }
 
@@ -694,6 +722,11 @@ fn main() {
             .map(Path::new)
             .ok_or_else(|| "evaluate needs a run directory".into())
             .and_then(evaluate_run),
+        Some("generate") => arguments
+            .get(1)
+            .map(Path::new)
+            .ok_or_else(|| "generate needs a run directory".into())
+            .and_then(|root| generate_run(root, &arguments[2..])),
         Some("serve") => arguments
             .get(1)
             .map(Path::new)

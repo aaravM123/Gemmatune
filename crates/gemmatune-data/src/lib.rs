@@ -225,5 +225,23 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn writing_style_smoke_data_has_eighty_noted_replies() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/writing-style/conversations.jsonl");
+        let conversations = fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<JsonConversation>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(conversations.len(), 80);
+        for conversation in conversations {
+            for message in conversation.messages.iter().filter(|message| message.role == "assistant") {
+                assert!(message.content.starts_with("Noted. "));
+                assert!(message.content.ends_with(" Want me to tighten that?"));
+            }
+        }
+    }
 }
 

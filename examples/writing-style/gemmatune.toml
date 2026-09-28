@@ -1,0 +1,18 @@
+[model]
+checkpoint = "gemma-3-1b-it"
+local_path = "/Users/aaravmehra/models/gemma-3-1b-it"
+method = "lora"
+device = "cpu"
+
+[dataset]
+format = "chat"
+train_split = 0.9
+redact_pii = true
+file = "conversations.jsonl"
+
+[lora]
+rank = 16
+alpha = 32
+epochs = 3
+learning_rate = 0.0002
+target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"]
