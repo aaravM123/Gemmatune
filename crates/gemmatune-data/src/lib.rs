@@ -58,6 +58,18 @@ impl GemmaTokenizer {
             io::Error::new(io::ErrorKind::InvalidData, format!("SentencePiece decoding failed: {error}"))
         })
     }
+
+    pub fn generation_stop_ids(&self) -> Vec<u32> {
+        (0..self.processor.piece_size() as i32)
+            .filter(|id| {
+                matches!(
+                    self.processor.id_to_piece(*id),
+                    Some("<end_of_turn>" | "<eos>")
+                )
+            })
+            .map(|id| id as u32)
+            .collect()
+    }
 }
 
 fn redact(text: &str) -> (String, usize) {

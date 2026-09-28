@@ -86,7 +86,9 @@ pub fn apply_chat_template(messages: &[ChatMessage], add_generation_prompt: bool
         rendered.push('\n');
         rendered.push_str(&message.content);
         rendered.push_str("<end_of_turn>");
-        rendered.push_str(EOS_TOKEN);
+        if gemma_role(&message.role) == "model" {
+            rendered.push_str(EOS_TOKEN);
+        }
         rendered.push('\n');
     }
     if add_generation_prompt {
@@ -109,7 +111,7 @@ mod tests {
         );
         assert_eq!(
             prompt,
-            "<start_of_turn>user\nHello<end_of_turn><eos>\n<start_of_turn>model\n"
+            "<start_of_turn>user\nHello<end_of_turn>\n<start_of_turn>model\n"
         );
     }
 
@@ -123,6 +125,7 @@ mod tests {
             false,
         );
         assert!(prompt.starts_with("<start_of_turn>model\n"));
+        assert!(prompt.ends_with("<end_of_turn><eos>\n"));
     }
 
     #[test]

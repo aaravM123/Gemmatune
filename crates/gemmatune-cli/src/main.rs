@@ -578,7 +578,7 @@ fn response(
     let input = tokenizer
         .encode(&prompt)
         .map_err(|error| format!("cannot tokenize request: {error}"))?;
-    let output = runtime.generate(&input, max_tokens)?;
+    let output = runtime.generate_until(&input, max_tokens, &tokenizer.generation_stop_ids())?;
     let content = tokenizer
         .decode(&output)
         .map_err(|error| format!("cannot decode Gemma output: {error}"))?;

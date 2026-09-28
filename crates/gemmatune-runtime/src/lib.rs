@@ -168,6 +168,10 @@ fn sample_next_token(logits: &Tensor) -> CandleResult<u32> {
         .to_scalar::<u32>()
 }
 
+fn is_generation_stop(token: u32, stop_tokens: &[u32]) -> bool {
+    stop_tokens.contains(&token)
+}
+
 impl AdapterRuntime {
     pub fn load(
         root: impl AsRef<Path>,
@@ -185,7 +189,17 @@ impl AdapterRuntime {
     }
 
     pub fn generate(&self, prompt_ids: &[u32], max_new_tokens: usize) -> Result<Vec<u32>, String> {
-        self.model.generate(prompt_ids, max_new_tokens)
+        self.model.generate_until(prompt_ids, max_new_tokens, &[])
+    }
+
+    pub fn generate_until(
+        &self,
+        prompt_ids: &[u32],
+        max_new_tokens: usize,
+        stop_tokens: &[u32],
+    ) -> Result<Vec<u32>, String> {
+        self.model
+            .generate_until(prompt_ids, max_new_tokens, stop_tokens)
     }
 
     pub fn reload_after_update(&mut self) -> Result<(), String> {
@@ -237,6 +251,15 @@ impl LocalGemma {
     }
 
     pub fn generate(&self, prompt_ids: &[u32], max_new_tokens: usize) -> Result<Vec<u32>, String> {
+        self.generate_until(prompt_ids, max_new_tokens, &[])
+    }
+
+    pub fn generate_until(
+        &self,
+        prompt_ids: &[u32],
+        max_new_tokens: usize,
+        stop_tokens: &[u32],
+    ) -> Result<Vec<u32>, String> {
         if prompt_ids.is_empty() {
             return Err("a Gemma prompt needs at least one token".into());
         }
@@ -256,6 +279,9 @@ impl LocalGemma {
                 .map_err(|error| format!("cannot sample Gemma output: {error}"))?;
             offset += next_input.len();
             next_input = vec![next];
+            if is_generation_stop(next, stop_tokens) {
+                break;
+            }
             generated.push(next);
         }
         Ok(generated)
@@ -284,5 +310,11 @@ mod tests {
         let logits = Tensor::from_vec(vec![0.0_f32, 4.0, 1.0], (1, 1, 3), &device)?;
         assert_eq!(sample_next_token(&logits)?, 1);
         Ok(())
+    }
+
+    #[test]
+    fn omits_sampled_stop_tokens_from_generation() {
+        assert!(is_generation_stop(7, &[7, 9]));
+        assert!(!is_generation_stop(6, &[7, 9]));
     }
 }
