@@ -396,10 +396,12 @@ impl TrainableGemmaDecoder {
                 },
             )?;
         }
-        let logits = self
-            .norm
-            .forward(&x)?
-            .matmul(&self.embeddings.embeddings().t()?)?;
+        let normalized = self.norm.forward(&x)?;
+        let (batch, tokens, hidden) = normalized.dims3()?;
+        let logits = normalized
+            .reshape((batch * tokens, hidden))?
+            .matmul(&self.embeddings.embeddings().t()?)?
+            .reshape((batch, tokens, VOCABULARY))?;
         (logits / 30.0)?.tanh()?.affine(30.0, 0.0)
     }
 }
@@ -543,6 +545,20 @@ mod tests {
         let embedding = candle_nn::embedding(4, 3, VarBuilder::zeros(DType::F32, &device))?;
         let token_ids = Tensor::from_vec(vec![0u32, 3, 1, 2], (1, 4), &device)?;
         assert_eq!(embedding.forward(&token_ids)?.dims3()?, (1, 4, 3));
+        Ok(())
+    }
+
+    #[test]
+    fn tied_lm_head_flattens_tokens_for_candle_matmul() -> Result<()> {
+        let device = Device::Cpu;
+        let embedding = candle_nn::embedding(5, 3, VarBuilder::zeros(DType::F32, &device))?;
+        let hidden = Tensor::zeros((1, 4, 3), DType::F32, &device)?;
+        let (batch, tokens, width) = hidden.dims3()?;
+        let logits = hidden
+            .reshape((batch * tokens, width))?
+            .matmul(&embedding.embeddings().t()?)?
+            .reshape((batch, tokens, 5))?;
+        assert_eq!(logits.dims3()?, (1, 4, 5));
         Ok(())
     }
 
