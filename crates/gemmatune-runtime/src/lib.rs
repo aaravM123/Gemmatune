@@ -160,6 +160,14 @@ pub struct AdapterRuntime {
     model: LocalGemma,
 }
 
+fn sample_next_token(logits: &Tensor) -> CandleResult<u32> {
+    logits
+        .squeeze(0)?
+        .squeeze(0)?
+        .argmax(D::Minus1)?
+        .to_scalar::<u32>()
+}
+
 impl AdapterRuntime {
     pub fn load(
         root: impl AsRef<Path>,
@@ -244,8 +252,7 @@ impl LocalGemma {
             let input = Tensor::from_vec(next_input.clone(), (1, next_input.len()), &self.device)
                 .map_err(|error| format!("cannot create Gemma input tensor: {error}"))?;
             let logits = model.forward(&input, offset).map_err(|error| format!("Gemma forward pass failed: {error}"))?;
-            let next = logits.squeeze(0).and_then(|tensor| tensor.argmax(D::Minus1))
-                .and_then(|tensor| tensor.to_scalar::<u32>())
+            let next = sample_next_token(&logits)
                 .map_err(|error| format!("cannot sample Gemma output: {error}"))?;
             offset += next_input.len();
             next_input = vec![next];
@@ -268,6 +275,14 @@ mod tests {
         let cpu_weight = checkpoint_weight.to_dtype(DType::F32)?;
         assert_eq!(cpu_weight.dtype(), DType::F32);
         assert_eq!(activations.matmul(&cpu_weight)?.dims2()?, (1, 2));
+        Ok(())
+    }
+
+    #[test]
+    fn samples_a_scalar_from_single_batch_single_token_logits() -> CandleResult<()> {
+        let device = CandleDevice::Cpu;
+        let logits = Tensor::from_vec(vec![0.0_f32, 4.0, 1.0], (1, 1, 3), &device)?;
+        assert_eq!(sample_next_token(&logits)?, 1);
         Ok(())
     }
 }
