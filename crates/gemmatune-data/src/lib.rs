@@ -32,6 +32,12 @@ pub struct GemmaTokenizer {
     processor: SentencePieceProcessor,
 }
 
+fn is_generation_stop_piece(piece: &str) -> bool {
+    let piece = piece
+        .trim_matches(|character: char| character == '▁' || character.is_whitespace());
+    matches!(piece, "<end_of_turn>" | "<eos>")
+}
+
 impl GemmaTokenizer {
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         let processor = SentencePieceProcessor::open(path.as_ref()).map_err(|error| {
@@ -60,15 +66,24 @@ impl GemmaTokenizer {
     }
 
     pub fn generation_stop_ids(&self) -> Vec<u32> {
-        (0..self.processor.piece_size() as i32)
+        let mut ids = ["<end_of_turn>", "<eos>"]
+            .into_iter()
+            .filter_map(|control| self.processor.encode(control).ok())
+            .filter(|encoded| encoded.len() == 1)
+            .map(|encoded| encoded[0] as u32)
+            .collect::<Vec<_>>();
+        ids.extend(
+            (0..self.processor.piece_size() as i32)
             .filter(|id| {
-                matches!(
-                    self.processor.id_to_piece(*id),
-                    Some("<end_of_turn>" | "<eos>")
-                )
+                self.processor
+                    .id_to_piece(*id)
+                    .is_some_and(is_generation_stop_piece)
             })
-            .map(|id| id as u32)
-            .collect()
+            .map(|id| id as u32),
+        );
+        ids.sort_unstable();
+        ids.dedup();
+        ids
     }
 }
 
@@ -172,6 +187,14 @@ mod tests {
             "mail [REDACTED_EMAIL] or call [REDACTED_NUMBER]"
         );
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn recognizes_gemma_turn_piece_variants_as_generation_stops() {
+        assert!(is_generation_stop_piece("<end_of_turn>"));
+        assert!(is_generation_stop_piece("▁<end_of_turn>"));
+        assert!(is_generation_stop_piece("<eos>\n"));
+        assert!(!is_generation_stop_piece("end_of_turn"));
     }
 }
 
