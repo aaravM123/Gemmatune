@@ -470,6 +470,37 @@ pub fn fine_tune(
     })
 }
 
+pub fn teacher_forced_predictions(
+    root: impl AsRef<Path>,
+    requested: RequestedDevice,
+    adapter: &TrainableAdapter,
+    sequences: &[Vec<u32>],
+) -> std::result::Result<(Vec<u32>, Vec<u32>), String> {
+    let decoder = TrainableGemmaDecoder::load_1b_it(root, requested, adapter)?;
+    let mut predictions = Vec::new();
+    let mut targets = Vec::new();
+    for sequence in sequences {
+        let batch = CausalBatch::from_tokens(sequence)?;
+        let token_count = batch.token_count();
+        let loss_start = model_turn_loss_start(&batch.inputs)?;
+        let expected = batch.targets[loss_start..].to_vec();
+        let inputs = Tensor::from_vec(batch.inputs, (1, token_count), &decoder.device)
+            .map_err(|error| format!("cannot create evaluation inputs: {error}"))?;
+        let logits = decoder
+            .forward(&inputs)
+            .and_then(|logits| logits.reshape((token_count, VOCABULARY)))
+            .and_then(|logits| logits.narrow(0, loss_start, expected.len()))
+            .map_err(|error| format!("Gemma evaluation forward pass failed: {error}"))?;
+        let predicted = logits
+            .argmax(D::Minus1)
+            .and_then(|tokens| tokens.to_vec1::<u32>())
+            .map_err(|error| format!("cannot select evaluation predictions: {error}"))?;
+        predictions.extend(predicted);
+        targets.extend(expected);
+    }
+    Ok((predictions, targets))
+}
+
 fn model_turn_loss_start(inputs: &[u32]) -> std::result::Result<usize, String> {
     inputs
         .iter()

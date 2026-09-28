@@ -5,7 +5,10 @@ use gemmatune_data::{prepare_chat_dataset, GemmaTokenizer, GEMMA3_TOKENIZER_FILE
 use gemmatune_eval::{evaluate, HeldOutDataset};
 use gemmatune_gemma::ChatMessage;
 use gemmatune_lora::{injection_plan, AdapterCheckpoint, TrainableAdapter};
-use gemmatune_runtime::{trainable::fine_tune as optimize_lora, AdapterRuntime, LocalGemma};
+use gemmatune_runtime::{
+    trainable::{fine_tune as optimize_lora, teacher_forced_predictions},
+    AdapterRuntime, LocalGemma,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     env, fs,
@@ -213,13 +216,19 @@ fn evaluate_run(root: &Path) -> Result<(), String> {
     }
     let adapter = load_adapter_weights(root, checkpoint.clone())?;
     let model_root = local_model_dir(&manifest.config)?;
-    let base = LocalGemma::load_1b_it(&model_root, manifest.config.model.device)?;
-    let injected =
-        AdapterRuntime::load(&model_root, manifest.config.model.device, adapter.clone())?;
-    let (base_predictions, targets) =
-        held_out_predictions(&held_out, |prompt, count| base.generate(prompt, count))?;
-    let (adapter_predictions, adapter_targets) =
-        held_out_predictions(&held_out, |prompt, count| injected.generate(prompt, count))?;
+    let base_adapter = TrainableAdapter::from_plan(checkpoint.clone());
+    let (base_predictions, targets) = teacher_forced_predictions(
+        &model_root,
+        manifest.config.model.device,
+        &base_adapter,
+        &held_out.sequences,
+    )?;
+    let (adapter_predictions, adapter_targets) = teacher_forced_predictions(
+        &model_root,
+        manifest.config.model.device,
+        &adapter,
+        &held_out.sequences,
+    )?;
     if adapter_targets != targets {
         return Err("held-out targets changed while evaluating the adapter".into());
     }
