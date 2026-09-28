@@ -227,7 +227,7 @@ mod tests {
     }
 
     #[test]
-    fn writing_style_smoke_data_has_eighty_noted_replies() {
+    fn writing_style_smoke_data_has_ten_train_and_two_held_out_replies() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../examples/writing-style/conversations.jsonl");
         let conversations = fs::read_to_string(path)
@@ -235,7 +235,9 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str::<JsonConversation>(line).unwrap())
             .collect::<Vec<_>>();
-        assert_eq!(conversations.len(), 80);
+        assert_eq!(conversations.len(), 12);
+        let split = ((conversations.len() as f32) * 0.9).floor() as usize;
+        assert_eq!((split, conversations.len() - split), (10, 2));
         for conversation in conversations {
             for message in conversation.messages.iter().filter(|message| message.role == "assistant") {
                 assert!(message.content.starts_with("Noted. "));
