@@ -10,24 +10,51 @@ pub const GEMMA_3_1B_LAYERS: usize = 26;
 const HIDDEN: usize = 1152;
 const HEAD_DIM: usize = 256;
 const HEADS: usize = 4;
+const KV_HEADS: usize = 1;
 const VOCABULARY: usize = 262_144;
 const MAX_POSITIONS: usize = 32_768;
 type Result<T> = CandleResult<T>;
 struct RmsNorm {
     weight: Tensor,
+    dimension: usize,
 }
 impl RmsNorm {
-    fn load(vb: VarBuilder) -> Result<Self> {
+    fn load(vb: VarBuilder, dimension: usize) -> Result<Self> {
         Ok(Self {
-            weight: vb.get(HIDDEN, "weight")?.to_dtype(DType::F32)?,
+            weight: vb.get(dimension, "weight")?.to_dtype(DType::F32)?,
+            dimension,
         })
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let variance = (x.sqr()?.sum_keepdim(D::Minus1)? / HIDDEN as f64)?;
+        let variance = (x.sqr()?.sum_keepdim(D::Minus1)? / self.dimension as f64)?;
         x.broadcast_div(&(variance + 1e-6)?.sqrt()?)?
             .broadcast_mul(&(&self.weight + 1.0)?)
     }
+}
+
+fn attention_projection_shape(module: &str) -> Result<(usize, usize)> {
+    match module {
+        "q_proj" => Ok((HIDDEN, HEADS * HEAD_DIM)),
+        "k_proj" | "v_proj" => Ok((HIDDEN, KV_HEADS * HEAD_DIM)),
+        "o_proj" => Ok((HEADS * HEAD_DIM, HIDDEN)),
+        _ => candle_core::bail!("unsupported Gemma attention projection `{module}`"),
+    }
+}
+
+fn validate_projection(adapter: &TrainableTensor) -> Result<()> {
+    let (input, output) = attention_projection_shape(&adapter.spec.module)?;
+    if adapter.spec.input_features != input || adapter.spec.output_features != output {
+        candle_core::bail!(
+            "Gemma 3 1B {} expects {} -> {}, got {} -> {}",
+            adapter.spec.module,
+            input,
+            output,
+            adapter.spec.input_features,
+            adapter.spec.output_features,
+        );
+    }
+    Ok(())
 }
 struct FrozenLinear {
     weight: Tensor,
@@ -135,6 +162,9 @@ impl Attention {
         let o = adapter
             .tensor("o_proj")
             .expect("validated adapter has o_proj");
+        for projection in [q, k, v, o] {
+            validate_projection(projection)?;
+        }
         let variables_for = |module| {
             variables
                 .iter()
@@ -147,8 +177,8 @@ impl Attention {
             k: LoraLinear::load(vb.pp("k_proj"), k, &variables_for("k_proj"))?,
             v: LoraLinear::load(vb.pp("v_proj"), v, &variables_for("v_proj"))?,
             o: LoraLinear::load(vb.pp("o_proj"), o, &variables_for("o_proj"))?,
-            q_norm: RmsNorm::load(vb.pp("q_norm"))?,
-            k_norm: RmsNorm::load(vb.pp("k_norm"))?,
+            q_norm: RmsNorm::load(vb.pp("q_norm"), HEAD_DIM)?,
+            k_norm: RmsNorm::load(vb.pp("k_norm"), HEAD_DIM)?,
             rotary,
         })
     }
@@ -225,10 +255,10 @@ impl Layer {
         Ok(Self {
             attention: Attention::load(vb.pp("self_attn"), adapter, variables, rotary)?,
             mlp: Mlp::load(vb.pp("mlp"))?,
-            input_norm: RmsNorm::load(vb.pp("input_layernorm"))?,
-            pre_ff_norm: RmsNorm::load(vb.pp("pre_feedforward_layernorm"))?,
-            post_ff_norm: RmsNorm::load(vb.pp("post_feedforward_layernorm"))?,
-            post_attn_norm: RmsNorm::load(vb.pp("post_attention_layernorm"))?,
+            input_norm: RmsNorm::load(vb.pp("input_layernorm"), HIDDEN)?,
+            pre_ff_norm: RmsNorm::load(vb.pp("pre_feedforward_layernorm"), HIDDEN)?,
+            post_ff_norm: RmsNorm::load(vb.pp("post_feedforward_layernorm"), HIDDEN)?,
+            post_attn_norm: RmsNorm::load(vb.pp("post_attention_layernorm"), HIDDEN)?,
             local,
         })
     }
@@ -307,7 +337,7 @@ impl TrainableGemmaDecoder {
                 .map_err(|error| format!("cannot load Gemma layer {index}: {error}"))?,
             );
         }
-        let norm = RmsNorm::load(vb.pp("norm"))
+        let norm = RmsNorm::load(vb.pp("norm"), HIDDEN)
             .map_err(|error| format!("cannot load Gemma output norm: {error}"))?;
         Ok(Self {
             adapter: adapter.clone(),
@@ -499,6 +529,16 @@ mod tests {
             .squeeze(0)?;
         assert_eq!(mask.to_vec2::<f32>()?[0][1], f32::NEG_INFINITY);
         assert_eq!(mask.to_vec2::<f32>()?[2][0], f32::NEG_INFINITY);
+        Ok(())
+    }
+
+    #[test]
+    fn uses_gemma_1b_head_dim_for_q_and_k_norms() -> Result<()> {
+        assert_eq!(HEAD_DIM, 256);
+        assert_eq!(attention_projection_shape("q_proj")?, (1152, 1024));
+        assert_eq!(attention_projection_shape("k_proj")?, (1152, 256));
+        assert_eq!(attention_projection_shape("v_proj")?, (1152, 256));
+        assert_eq!(attention_projection_shape("o_proj")?, (1024, 1152));
         Ok(())
     }
 }
