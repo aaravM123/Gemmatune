@@ -3,11 +3,13 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
+cargo build --release -p gemmatune-cli
+
 while IFS= read -r prompt; do
   [[ -z "$prompt" ]] && continue
   printf '\nPrompt: %s\n' "$prompt"
   printf 'Base: '
-  cargo run --quiet -p gemmatune-cli -- generate ./runs/latest --base "$prompt"
+  ./target/release/gemmatune generate ./runs/latest --base "$prompt" --max-tokens 24
   printf 'Adapter: '
-  cargo run --quiet -p gemmatune-cli -- generate ./runs/latest --adapter "$prompt"
+  ./target/release/gemmatune generate ./runs/latest --adapter "$prompt" --max-tokens 24
 done < examples/writing-style/prompts.txt

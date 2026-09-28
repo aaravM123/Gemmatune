@@ -30,7 +30,7 @@ fn usage() {
     eprintln!(
         "GemmaTune — local Gemma LoRA tooling\n\
          Usage:\n  gemmatune finetune <dataset-dir> [--device cpu|metal|cuda]\n\
-         \x20 gemmatune evaluate <run-dir>\n  gemmatune generate <run-dir> --base|--adapter <prompt>\n\
+         \x20 gemmatune evaluate <run-dir>\n  gemmatune generate <run-dir> --base|--adapter <prompt> [--max-tokens N]\n\
          \x20 gemmatune serve <run-dir> [--port 8080] [--once]\n\
          \nDataset directories contain gemmatune.toml and conversations.jsonl."
     );
@@ -246,8 +246,18 @@ fn evaluate_run(root: &Path) -> Result<(), String> {
 
 fn generate_run(root: &Path, args: &[String]) -> Result<(), String> {
     let (manifest, checkpoint) = load_run(root)?;
-    let [mode, prompt] = args else {
-        return Err("generate expects `--base|--adapter <prompt>`".into());
+    let (mode, prompt, max_tokens) = match args {
+        [mode, prompt] => (mode, prompt, DEFAULT_MAX_TOKENS),
+        [mode, prompt, flag, value] if flag == "--max-tokens" => {
+            let max_tokens = value
+                .parse::<usize>()
+                .map_err(|_| "--max-tokens must be a whole number")?;
+            if !(1..=MAX_GENERATION_TOKENS).contains(&max_tokens) {
+                return Err(format!("--max-tokens must be between 1 and {MAX_GENERATION_TOKENS}"));
+            }
+            (mode, prompt, max_tokens)
+        }
+        _ => return Err("generate expects `--base|--adapter <prompt> [--max-tokens N]`".into()),
     };
     let model_root = local_model_dir(&manifest.config)?;
     let tokenizer = GemmaTokenizer::open(model_root.join(GEMMA3_TOKENIZER_FILE))
@@ -259,11 +269,11 @@ fn generate_run(root: &Path, args: &[String]) -> Result<(), String> {
     let input = tokenizer.encode(&template).map_err(|error| format!("cannot tokenize prompt: {error}"))?;
     let output = match mode.as_str() {
         "--base" => LocalGemma::load_1b_it(&model_root, manifest.config.model.device)?
-            .generate_until(&input, 64, &tokenizer.generation_stop_ids())?,
+            .generate_until(&input, max_tokens, &tokenizer.generation_stop_ids())?,
         "--adapter" => {
             let adapter = load_adapter_weights(root, checkpoint)?;
             AdapterRuntime::load(&model_root, manifest.config.model.device, adapter)?
-                .generate_until(&input, 64, &tokenizer.generation_stop_ids())?
+                .generate_until(&input, max_tokens, &tokenizer.generation_stop_ids())?
         }
         _ => return Err("generate expects `--base` or `--adapter`".into()),
     };
