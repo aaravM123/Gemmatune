@@ -366,14 +366,8 @@ impl TrainableGemmaDecoder {
                 .iter()
                 .find(|(module, _, _)| module == &tensor.spec.module)
                 .expect("every adapter tensor has Candle variables");
-            tensor.a = a
-                .as_tensor()
-                .to_vec1()
-                .map_err(|error| format!("cannot read updated LoRA A: {error}"))?;
-            tensor.b = b
-                .as_tensor()
-                .to_vec1()
-                .map_err(|error| format!("cannot read updated LoRA B: {error}"))?;
+            tensor.a = read_lora_matrix(a, tensor.spec.shape_a, "A")?;
+            tensor.b = read_lora_matrix(b, tensor.spec.shape_b, "B")?;
         }
         Ok(adapter)
     }
@@ -466,6 +460,28 @@ pub fn fine_tune(
         mean_loss: total_loss / steps as f32,
     })
 }
+
+fn read_lora_matrix(
+    variable: &Var,
+    expected: (usize, usize),
+    name: &str,
+) -> std::result::Result<Vec<f32>, String> {
+    let matrix = variable
+        .as_tensor()
+        .to_vec2::<f32>()
+        .map_err(|error| format!("cannot read updated LoRA {name}: {error}"))?;
+    if matrix.len() != expected.0 || matrix.iter().any(|row| row.len() != expected.1) {
+        return Err(format!(
+            "updated LoRA {name} has shape [{}, {}], expected [{}, {}]",
+            matrix.len(),
+            matrix.first().map_or(0, Vec::len),
+            expected.0,
+            expected.1,
+        ));
+    }
+    Ok(matrix.into_iter().flatten().collect())
+}
+
 fn causal_mask(
     batch: usize,
     tokens: usize,
@@ -559,6 +575,19 @@ mod tests {
             .matmul(&embedding.embeddings().t()?)?
             .reshape((batch, tokens, 5))?;
         assert_eq!(logits.dims3()?, (1, 4, 5));
+        Ok(())
+    }
+
+    #[test]
+    fn reads_rank_two_lora_a_and_b_matrices() -> Result<()> {
+        let device = Device::Cpu;
+        let a = Var::from_vec(vec![1.0_f32, 2.0, 3.0, 4.0], (2, 2), &device)?;
+        let b = Var::from_vec(vec![5.0_f32, 6.0, 7.0, 8.0, 9.0, 10.0], (3, 2), &device)?;
+        assert_eq!(read_lora_matrix(&a, (2, 2), "A").unwrap(), vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(
+            read_lora_matrix(&b, (3, 2), "B").unwrap(),
+            vec![5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
+        );
         Ok(())
     }
 
