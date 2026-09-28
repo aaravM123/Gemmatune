@@ -1,5 +1,5 @@
-use candle_core::{DType, Device, Result as CandleResult, Tensor, Var, D};
-use candle_nn::{optim::Optimizer, AdamW, ParamsAdamW, VarBuilder};
+use candle_core::{DType, Device, Module, Result as CandleResult, Tensor, Var, D};
+use candle_nn::{optim::Optimizer, AdamW, Embedding, ParamsAdamW, VarBuilder};
 use candle_transformers::utils::repeat_kv;
 use gemmatune_core::Device as RequestedDevice;
 use gemmatune_lora::{TrainableAdapter, TrainableTensor};
@@ -273,7 +273,7 @@ impl Layer {
 pub struct TrainableGemmaDecoder {
     adapter: TrainableAdapter,
     variables: Vec<(String, Var, Var)>,
-    embeddings: Tensor,
+    embeddings: Embedding,
     layers: Vec<Layer>,
     norm: RmsNorm,
     device: Device,
@@ -299,11 +299,12 @@ impl TrainableGemmaDecoder {
                 .map_err(|error| format!("cannot map Gemma safetensors: {error}"))?
         }
         .pp("model");
-        let embeddings = vb
+        let embedding_weights = vb
             .pp("embed_tokens")
             .get((VOCABULARY, HIDDEN), "weight")
             .and_then(|weight| weight.to_dtype(DType::F32))
             .map_err(|error| format!("cannot load Gemma token embeddings: {error}"))?;
+        let embeddings = Embedding::new(embedding_weights, HIDDEN);
         let variables = adapter
             .tensors
             .iter()
@@ -381,7 +382,7 @@ impl TrainableGemmaDecoder {
         if tokens == 0 || tokens > MAX_POSITIONS {
             candle_core::bail!("sequence length must be in 1..={MAX_POSITIONS}");
         }
-        let mut x = (self.embeddings.embedding(input_ids)? * (HIDDEN as f64).sqrt())?;
+        let mut x = (self.embeddings.forward(input_ids)? * (HIDDEN as f64).sqrt())?;
         let global_mask = causal_mask(batch, tokens, None, &self.device)?;
         let local_mask = causal_mask(batch, tokens, Some(512), &self.device)?;
         for layer in &self.layers {
@@ -394,7 +395,10 @@ impl TrainableGemmaDecoder {
                 },
             )?;
         }
-        let logits = self.norm.forward(&x)?.matmul(&self.embeddings.t()?)?;
+        let logits = self
+            .norm
+            .forward(&x)?
+            .matmul(&self.embeddings.embeddings().t()?)?;
         (logits / 30.0)?.tanh()?.affine(30.0, 0.0)
     }
 }
@@ -529,6 +533,15 @@ mod tests {
             .squeeze(0)?;
         assert_eq!(mask.to_vec2::<f32>()?[0][1], f32::NEG_INFINITY);
         assert_eq!(mask.to_vec2::<f32>()?[2][0], f32::NEG_INFINITY);
+        Ok(())
+    }
+
+    #[test]
+    fn token_ids_use_embedding_lookup_not_matrix_multiplication() -> Result<()> {
+        let device = Device::Cpu;
+        let embedding = candle_nn::embedding(4, 3, VarBuilder::zeros(DType::F32, &device))?;
+        let token_ids = Tensor::from_vec(vec![0u32, 3, 1, 2], (1, 4), &device)?;
+        assert_eq!(embedding.forward(&token_ids)?.dims3()?, (1, 4, 3));
         Ok(())
     }
 
