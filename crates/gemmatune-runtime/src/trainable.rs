@@ -131,8 +131,8 @@ impl Rotary {
         let cos = self.cos.narrow(0, 0, length)?;
         let sin = self.sin.narrow(0, 0, length)?;
         Ok((
-            candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?,
-            candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?,
+            candle_nn::rotary_emb::rope_slow(&q.contiguous()?, &cos, &sin)?,
+            candle_nn::rotary_emb::rope_slow(&k.contiguous()?, &cos, &sin)?,
         ))
     }
 }
@@ -233,11 +233,7 @@ impl Mlp {
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let gate = self.gate.forward(x)?;
-        let cubic = (&gate * &gate * &gate)?;
-        let tanh_input = ((&gate + (cubic * 0.044_715)?)? * (2.0 / std::f64::consts::PI).sqrt())?;
-        let gelu_tanh = (&gate * 0.5)? * (tanh_input.tanh()? + 1.0)?;
-        let hidden = (gelu_tanh * self.up.forward(x)?)?;
+        let hidden = (self.gate.forward(x)?.gelu_erf()? * self.up.forward(x)?)?;
         self.down.forward(&hidden)
     }
 }
@@ -539,6 +535,21 @@ mod tests {
         let gradients = projection.forward(&input)?.sum_all()?.backward()?;
         assert!(gradients.get(&projection.a).is_some());
         assert!(gradients.get(&projection.b).is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn differentiable_rope_preserves_query_and_key_gradients() -> Result<()> {
+        let device = Device::Cpu;
+        let query = Var::from_vec(vec![1_f32, 2.0], (1, 1, 1, 2), &device)?;
+        let key = Var::from_vec(vec![3_f32, 4.0], (1, 1, 1, 2), &device)?;
+        let cos = Tensor::from_vec(vec![1_f32], (1, 1), &device)?;
+        let sin = Tensor::from_vec(vec![0_f32], (1, 1), &device)?;
+        let rotated_query = candle_nn::rotary_emb::rope_slow(&query.as_tensor().contiguous()?, &cos, &sin)?;
+        let rotated_key = candle_nn::rotary_emb::rope_slow(&key.as_tensor().contiguous()?, &cos, &sin)?;
+        let gradients = (rotated_query.sum_all()? + rotated_key.sum_all()?)?.backward()?;
+        assert!(gradients.get(&query).is_some());
+        assert!(gradients.get(&key).is_some());
         Ok(())
     }
 
