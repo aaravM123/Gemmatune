@@ -11,6 +11,7 @@ const HIDDEN: usize = 1152;
 const HEAD_DIM: usize = 256;
 const HEADS: usize = 4;
 const KV_HEADS: usize = 1;
+const QUERY_WIDTH: usize = HEADS * HEAD_DIM;
 const VOCABULARY: usize = 262_144;
 const MAX_POSITIONS: usize = 32_768;
 type Result<T> = CandleResult<T>;
@@ -35,9 +36,9 @@ impl RmsNorm {
 
 fn attention_projection_shape(module: &str) -> Result<(usize, usize)> {
     match module {
-        "q_proj" => Ok((HIDDEN, HEADS * HEAD_DIM)),
+        "q_proj" => Ok((HIDDEN, QUERY_WIDTH)),
         "k_proj" | "v_proj" => Ok((HIDDEN, KV_HEADS * HEAD_DIM)),
-        "o_proj" => Ok((HEADS * HEAD_DIM, HIDDEN)),
+        "o_proj" => Ok((QUERY_WIDTH, HIDDEN)),
         _ => candle_core::bail!("unsupported Gemma attention projection `{module}`"),
     }
 }
@@ -211,7 +212,7 @@ impl Attention {
         let output = weights
             .matmul(&repeat_kv(v, HEADS)?)?
             .transpose(1, 2)?
-            .reshape((batch, tokens, HIDDEN))?;
+            .reshape((batch, tokens, QUERY_WIDTH))?;
         self.o.forward(&output)
     }
 
@@ -552,6 +553,13 @@ mod tests {
         assert_eq!(attention_projection_shape("k_proj")?, (1152, 256));
         assert_eq!(attention_projection_shape("v_proj")?, (1152, 256));
         assert_eq!(attention_projection_shape("o_proj")?, (1024, 1152));
+        Ok(())
+    }
+
+    #[test]
+    fn merges_query_heads_before_the_output_projection() -> Result<()> {
+        assert_eq!(QUERY_WIDTH, 1024);
+        assert_eq!(attention_projection_shape("o_proj")?, (QUERY_WIDTH, HIDDEN));
         Ok(())
     }
 }
