@@ -1,3 +1,4 @@
+use gemmatune_gmail_export::{export_pairs, EmailPair};
 use gemmatune_core::{
     fine_tune, gemma_model, training_dataset, Device, TrainingConfig, TrainingManifest,
 };
@@ -33,6 +34,7 @@ fn usage() {
     eprintln!(
         "GemmaTune — local Gemma LoRA tooling\n\
          Usage:\n  gemmatune finetune <dataset-dir> [--device cpu|metal|cuda]\n\
+         \x20 gemmatune gmail-export <output-dir> --pairs <pairs.json>\n\
          \x20 gemmatune evaluate <run-dir>\n  gemmatune generate <run-dir> --base|--adapter <prompt> [--max-tokens N]\n\
          \x20 gemmatune serve <run-dir> [--port 8080] [--once]\n\
          \nDataset directories contain gemmatune.toml and conversations.jsonl."
@@ -92,6 +94,32 @@ fn load_adapter_runtime(
         .map_err(|error| format!("cannot load Gemma tokenizer: {error}"))?;
     let runtime = AdapterRuntime::load(root, config.model.device, adapter)?;
     Ok((tokenizer, runtime))
+}
+
+fn gmail_export(output_dir: &Path, args: &[String]) -> Result<(), String> {
+    let pairs_path = match args {
+        [flag, path] if flag == "--pairs" => PathBuf::from(path),
+        _ => return Err("gmail-export expects `--pairs <pairs.json>`".into()),
+    };
+    let source = fs::read_to_string(&pairs_path)
+        .map_err(|error| format!("cannot read {}: {error}", pairs_path.display()))?;
+    let pairs: Vec<EmailPair> = serde_json::from_str(&source).map_err(|error| {
+        format!("invalid pairs JSON in {}: {error}", pairs_path.display())
+    })?;
+    if pairs.is_empty() {
+        return Err("pairs JSON must contain at least one email pair".into());
+    }
+    export_pairs(&pairs, output_dir)
+        .map_err(|error| format!("cannot write dataset to {}: {error}", output_dir.display()))?;
+    println!(
+        "Wrote {} conversation(s) to {}/{} and {}/{}",
+        pairs.len(),
+        output_dir.display(),
+        gemmatune_gmail_export::CONVERSATIONS_FILE,
+        output_dir.display(),
+        gemmatune_gmail_export::CONFIG_FILE,
+    );
+    Ok(())
 }
 
 fn finetune(root: &Path, args: &[String]) -> Result<(), String> {
@@ -731,6 +759,11 @@ fn main() {
     );
     let arguments = env::args().skip(1).collect::<Vec<_>>();
     let result = match arguments.first().map(String::as_str) {
+        Some("gmail-export") => arguments
+            .get(1)
+            .map(Path::new)
+            .ok_or_else(|| "gmail-export needs an output directory".into())
+            .and_then(|root| gmail_export(root, &arguments[2..])),
         Some("finetune") => arguments
             .get(1)
             .map(Path::new)

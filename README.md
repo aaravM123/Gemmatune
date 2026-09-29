@@ -18,6 +18,20 @@ gemma-3-1b-it/
 All safetensor shards in that directory are loaded. The reference runtime is
 Gemma 3 1B IT: 26 decoder layers, 4 query heads, 1 KV head, and 32K context.
 
+## Gmail writing-style export (phase 1)
+
+Selected sent-reply pairs (the message you were answering plus your reply, or
+reply-only) can be turned into a finetune dataset without calling Gmail:
+
+```bash
+gemmatune gmail-export ./my-style-dataset --pairs selected-pairs.json
+```
+
+That writes `conversations.jsonl` and `gemmatune.toml` for `gemmatune finetune`.
+Set `model.local_path` in the generated config to your local Gemma 3 1B IT
+checkpoint. Gmail OAuth, mailbox selection, and draft creation are planned next;
+see the product plan in your project docs for the full five-phase flow.
+
 ## Fine-tune locally
 
 ```bash

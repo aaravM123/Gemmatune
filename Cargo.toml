@@ -8,6 +8,7 @@ members = [
     "crates/gemmatune-runtime",
     "crates/gemmatune-eval",
     "crates/gemmatune-cli",
+    "crates/gemmatune-gmail-export",
 ]
 resolver = "2"
 

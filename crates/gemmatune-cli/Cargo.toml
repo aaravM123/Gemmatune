@@ -19,6 +19,7 @@ gemmatune-data = { path = "../gemmatune-data" }
 gemmatune-eval = { path = "../gemmatune-eval" }
 gemmatune-gemma = { path = "../gemmatune-gemma" }
 gemmatune-lora = { path = "../gemmatune-lora" }
+gemmatune-gmail-export = { path = "../gemmatune-gmail-export" }
 gemmatune-runtime = { path = "../gemmatune-runtime" }
 indexmap.workspace = true
 serde.workspace = true
