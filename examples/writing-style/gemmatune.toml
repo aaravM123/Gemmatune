@@ -13,6 +13,6 @@ file = "conversations.jsonl"
 [lora]
 rank = 16
 alpha = 32
-epochs = 1
-learning_rate = 0.0002
+epochs = 3
+learning_rate = 0.001
 target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"]

@@ -14,6 +14,7 @@ const KV_HEADS: usize = 1;
 const QUERY_WIDTH: usize = HEADS * HEAD_DIM;
 const VOCABULARY: usize = 262_144;
 const MAX_POSITIONS: usize = 32_768;
+const START_OF_TURN_ID: u32 = 105;
 type Result<T> = CandleResult<T>;
 struct RmsNorm {
     weight: Tensor,
@@ -130,8 +131,8 @@ impl Rotary {
         let cos = self.cos.narrow(0, 0, length)?;
         let sin = self.sin.narrow(0, 0, length)?;
         Ok((
-            candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?,
-            candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?,
+            candle_nn::rotary_emb::rope_slow(&q.contiguous()?, &cos, &sin)?,
+            candle_nn::rotary_emb::rope_slow(&k.contiguous()?, &cos, &sin)?,
         ))
     }
 }
@@ -431,19 +432,27 @@ pub fn fine_tune(
         for sequence in sequences {
             let batch = CausalBatch::from_tokens(sequence)?;
             let token_count = batch.token_count();
+            let loss_start = model_turn_loss_start(&batch.inputs)?;
+            let model_targets = batch.targets[loss_start..].to_vec();
             let inputs = Tensor::from_vec(
                 batch.inputs,
                 (1, token_count),
                 &decoder.device,
             )
             .map_err(|error| format!("cannot create training inputs: {error}"))?;
-            let targets = Tensor::from_vec(batch.targets, token_count, &decoder.device)
-                .map_err(|error| format!("cannot create training targets: {error}"))?;
             let logits = decoder
                 .forward(&inputs)
                 .and_then(|logits| logits.reshape((token_count, VOCABULARY)))
                 .map_err(|error| format!("Gemma training forward pass failed: {error}"))?;
-            let loss = candle_nn::loss::cross_entropy(&logits, &targets)
+            let model_logits = logits
+                .narrow(0, loss_start, model_targets.len())
+                .map_err(|error| format!("cannot isolate model-turn logits: {error}"))?;
+            let model_target_count = model_logits
+                .dim(0)
+                .map_err(|error| format!("cannot read model-turn logits: {error}"))?;
+            let model_targets = Tensor::from_vec(model_targets, model_target_count, &decoder.device)
+                .map_err(|error| format!("cannot isolate model-turn targets: {error}"))?;
+            let loss = candle_nn::loss::cross_entropy(&model_logits, &model_targets)
                 .map_err(|error| format!("cannot calculate full-token cross entropy: {error}"))?;
             total_loss += loss
                 .to_scalar::<f32>()
@@ -459,6 +468,44 @@ pub fn fine_tune(
         steps,
         mean_loss: total_loss / steps as f32,
     })
+}
+
+pub fn teacher_forced_predictions(
+    root: impl AsRef<Path>,
+    requested: RequestedDevice,
+    adapter: &TrainableAdapter,
+    sequences: &[Vec<u32>],
+) -> std::result::Result<(Vec<u32>, Vec<u32>), String> {
+    let decoder = TrainableGemmaDecoder::load_1b_it(root, requested, adapter)?;
+    let mut predictions = Vec::new();
+    let mut targets = Vec::new();
+    for sequence in sequences {
+        let batch = CausalBatch::from_tokens(sequence)?;
+        let token_count = batch.token_count();
+        let loss_start = model_turn_loss_start(&batch.inputs)?;
+        let expected = batch.targets[loss_start..].to_vec();
+        let inputs = Tensor::from_vec(batch.inputs, (1, token_count), &decoder.device)
+            .map_err(|error| format!("cannot create evaluation inputs: {error}"))?;
+        let logits = decoder
+            .forward(&inputs)
+            .and_then(|logits| logits.reshape((token_count, VOCABULARY)))
+            .and_then(|logits| logits.narrow(0, loss_start, expected.len()))
+            .map_err(|error| format!("Gemma evaluation forward pass failed: {error}"))?;
+        let predicted = logits
+            .argmax(D::Minus1)
+            .and_then(|tokens| tokens.to_vec1::<u32>())
+            .map_err(|error| format!("cannot select evaluation predictions: {error}"))?;
+        predictions.extend(predicted);
+        targets.extend(expected);
+    }
+    Ok((predictions, targets))
+}
+
+fn model_turn_loss_start(inputs: &[u32]) -> std::result::Result<usize, String> {
+    inputs
+        .iter()
+        .rposition(|token| *token == START_OF_TURN_ID)
+        .ok_or_else(|| "training sequence has no Gemma start-of-turn token".into())
 }
 
 fn read_lora_matrix(
@@ -523,6 +570,21 @@ mod tests {
     }
 
     #[test]
+    fn differentiable_rope_preserves_query_and_key_gradients() -> Result<()> {
+        let device = Device::Cpu;
+        let query = Var::from_vec(vec![1_f32, 2.0], (1, 1, 1, 2), &device)?;
+        let key = Var::from_vec(vec![3_f32, 4.0], (1, 1, 1, 2), &device)?;
+        let cos = Tensor::from_vec(vec![1_f32], (1, 1), &device)?;
+        let sin = Tensor::from_vec(vec![0_f32], (1, 1), &device)?;
+        let rotated_query = candle_nn::rotary_emb::rope_slow(&query.as_tensor().contiguous()?, &cos, &sin)?;
+        let rotated_key = candle_nn::rotary_emb::rope_slow(&key.as_tensor().contiguous()?, &cos, &sin)?;
+        let gradients = (rotated_query.sum_all()? + rotated_key.sum_all()?)?.backward()?;
+        assert!(gradients.get(&query).is_some());
+        assert!(gradients.get(&key).is_some());
+        Ok(())
+    }
+
+    #[test]
     fn candle_adamw_updates_the_lora_variables() -> Result<()> {
         let device = Device::Cpu;
         let projection = LoraLinear {
@@ -542,6 +604,25 @@ mod tests {
         )?;
         optimizer.backward_step(&loss)?;
         assert_ne!(before, projection.b.as_tensor().to_vec2::<f32>()?);
+        Ok(())
+    }
+
+    #[test]
+    fn nonzero_lora_b_changes_projection_output() -> Result<()> {
+        let device = Device::Cpu;
+        let projection = LoraLinear {
+            base: FrozenLinear {
+                weight: Tensor::zeros((2, 2), DType::F32, &device)?,
+            },
+            a: Var::from_vec(vec![1f32, 0.0], (1, 2), &device)?,
+            b: Var::from_vec(vec![2f32, 3.0], (2, 1), &device)?,
+            scale: 1.0,
+        };
+        let input = Tensor::from_vec(vec![1f32, 0.0], (1, 1, 2), &device)?;
+        assert_ne!(
+            projection.base.forward(&input)?.to_vec3::<f32>()?,
+            projection.forward(&input)?.to_vec3::<f32>()?
+        );
         Ok(())
     }
 
@@ -576,6 +657,11 @@ mod tests {
             .reshape((batch, tokens, 5))?;
         assert_eq!(logits.dims3()?, (1, 4, 5));
         Ok(())
+    }
+
+    #[test]
+    fn masks_prompt_tokens_before_the_model_turn() {
+        assert_eq!(model_turn_loss_start(&[2, 105, 9, 106, 105, 11, 12]).unwrap(), 4);
     }
 
     #[test]
