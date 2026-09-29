@@ -1,24 +1,26 @@
-# Gemma 3 1B CPU test results
+# Gemma 3 1B test results
 
-This page records one end-to-end GemmaTune run on **Gemma 3 1B IT** on CPU.
-Metal and Gemma 3 4B were not part of this test.
+This page records end-to-end GemmaTune runs on **Gemma 3 1B IT** on Mac CPU and
+Metal. Gemma 3 4B is not covered here.
 
-## Setup
+## Shared setup
 
-- **Machine:** Mac, release build, `--device cpu`
 - **Checkpoint** (outside the repo): `/Users/aaravmehra/models/gemma-3-1b-it`
   - Gemma 3 1B IT with `model.safetensors` and SentencePiece
     `gemma3_cleaned_262144_v2.spiece.model`
 - **Dataset:** `examples/writing-style` — 12 chats, 10 train / 2 held out
 - **Target style:** `Noted. <one sentence> Want me to tighten that?`
-- **Code revision:** after [PR #29](https://github.com/aaravM123/Second-Project/pull/29)
-  (`b7a9cdc`), which fixed the LoRA training signal (differentiable RoPE,
-  reply-only loss, teacher-forced evaluate)
+- **Training signal:** after [PR #29](https://github.com/aaravM123/Second-Project/pull/29)
+  (`b7a9cdc`) — differentiable RoPE, reply-only loss, teacher-forced evaluate
 
 Commands were run from `~/Second-Project` with the checkpoint path set in
 `examples/writing-style/gemmatune.toml`.
 
-## Commands
+## CPU
+
+- **Machine:** Mac, release build, `--device cpu`
+
+### Commands
 
 ```bash
 caffeinate -i cargo run --release -p gemmatune-cli -- finetune ./examples/writing-style --device cpu
@@ -29,7 +31,7 @@ bash examples/writing-style/compare.sh
 `compare.sh` runs two prompts from `examples/writing-style/prompts.txt` with
 `--max-tokens 8` for base vs adapter generation.
 
-## Finetune
+### Finetune
 
 Run directory: `runs/latest`
 
@@ -39,9 +41,9 @@ Run directory: `runs/latest`
 - Final loss: **1.4957**
 - Backend: **cpu**
 
-## Evaluate
+### Evaluate
 
-On 42 held-out tokens (teacher-forced next-token accuracy over the model
+On 42 held-out reply tokens (teacher-forced next-token accuracy over the model
 turn, not only the last token):
 
 | Model   | Accuracy |
@@ -51,7 +53,7 @@ turn, not only the last token):
 
 Improvement: **+0.571**
 
-## Compare (8-token cap)
+### Compare (8-token cap)
 
 **Prompt:** Rewrite for a brief customer update: The maintenance window is
 complete and all services are available.
@@ -67,6 +69,21 @@ Tuesday to Wednesday morning.
 
 Adapter lines are truncated because compare stops at 8 tokens, so the closing
 `Want me to tighten that?` does not appear in this output.
+
+## Metal
+
+- Mac, release build, `--features metal`, `--device metal`, branch
+  `cursor/gemmatune-metal-device-261c` ([PR #30](https://github.com/aaravM123/Gemmatune/pull/30)),
+  after pinning `candle-metal-kernels` to 0.9.1
+- **Finetune:** 10 train / 2 validation, 484 tokens, 30 AdamW steps, loss
+  **1.4957**, backend **metal**
+- **Evaluate:** 42 held-out reply tokens, base **0.333**, adapter **0.905**,
+  improvement **+0.571**
+- **Generate** (8 tokens), prompt: “Rewrite for a brief customer update: The
+  maintenance window is complete and all services are available.” Base: “Here
+  are a few options for a brief” Adapter: “Noted. The maintenance is complete
+  and”
+- These numbers match the CPU run. Gemma 3 4B is still not tested.
 
 ## Pass criteria
 
@@ -87,6 +104,6 @@ CPU serve was verified separately: a Hello request against `runs/latest` on port
 
 ## Scope
 
-This run proves the **1B CPU cycle**: finetune, evaluate, serve (verified
-earlier), and short style adaptation via `compare.sh`. Metal and Gemma 3 4B are
-not covered here.
+These runs prove the **1B CPU and Metal cycle**: finetune, evaluate, serve on
+CPU (verified earlier), and short style adaptation. Gemma 3 4B is not covered
+here.
