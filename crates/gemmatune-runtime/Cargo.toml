@@ -8,10 +8,11 @@ description = "Local Gemma 3 execution backed by Candle"
 [features]
 default = []
 cuda = ["candle-core/cuda", "candle-transformers/cuda"]
-metal = ["candle-core/metal", "candle-transformers/metal"]
+metal = ["candle-core/metal", "candle-transformers/metal", "dep:candle-metal-kernels"]
 
 [dependencies]
 candle-core = "=0.9.1"
+candle-metal-kernels = { version = "=0.9.1", optional = true }
 candle-nn = "=0.9.1"
 candle-transformers = "=0.9.1"
 gemmatune-core = { path = "../gemmatune-core" }
