@@ -41,7 +41,8 @@ Run directory: `runs/latest`
 
 ## Evaluate
 
-On 42 held-out tokens (teacher-forced final-token prediction):
+On 42 held-out tokens (teacher-forced next-token accuracy over the model
+turn, not only the last token):
 
 | Model   | Accuracy |
 |---------|----------|
