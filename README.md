@@ -2,7 +2,7 @@
 
 GemmaTune is a local Rust SDK for fine-tuning Gemma 3 1B IT with LoRA. It
 loads a checkpoint from disk and does not send prompts, training examples, or
-adapter weights to a hosted service. See [Gemma 3 1B CPU test results](docs/gemma-1b-test-results.md) for a recorded finetune, evaluate, and compare run.
+adapter weights to a hosted service. See [Gemma 3 1B test results](docs/gemma-1b-test-results.md) for recorded CPU and Metal finetune, evaluate, and compare runs.
 
 ## Local checkpoint layout
 
