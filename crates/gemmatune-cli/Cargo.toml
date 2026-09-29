@@ -9,6 +9,10 @@ description = "Fully local GemmaTune training, evaluation, and serving CLI"
 name = "gemmatune"
 path = "src/main.rs"
 
+[features]
+default = []
+metal = ["gemmatune-runtime/metal"]
+
 [dependencies]
 gemmatune-core = { path = "../gemmatune-core" }
 gemmatune-data = { path = "../gemmatune-data" }
